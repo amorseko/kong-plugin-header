@@ -57,13 +57,15 @@ func (conf *Config) Access(kong *pdk.PDK) {
                     value = values[0]
                 }
             case "query":
-                query, err := kong.Request.GetQueryArg(kv.Key)
+				queryArgs, err := kong.Request.GetQuery(-1)
                 if err != nil {
                     kong.Log.Err(fmt.Sprintf("failed to get query: %v", err))
                     continue
                 }
-				kong.Log.Info(fmt.Printf("data query string : %v", kv.ValueSource))
-                value = query
+				values, exists := queryArgs[kv.Key]
+                if exists && len(values) > 0 {
+                    value = values[0]
+                }
             default:
                 kong.Log.Err(fmt.Sprintf("unknown value_source: %v", kv.ValueSource))
                 continue
