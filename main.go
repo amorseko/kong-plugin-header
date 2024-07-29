@@ -8,14 +8,12 @@ import (
 	"github.com/Kong/go-pdk/server"
 )
 
-type KeyValuePair struct {
-    Key         string `json:"key"`
-    ValueSource string `json:"value_source"`
-}
-
 type Config struct {
-    TargetField  string           `json:"target_field"`
-    KeyValuePairs []KeyValuePair  `json:"key_value_pairs"`
+    TargetField    string `json:"target_field"`
+    KeyValuePairs  []struct {
+        Key          string `json:"key"`
+        ValueSource  string `json:"value_source"`
+    } `json:"key_value_pairs"`
 }
 
 func New() interface{} {
@@ -44,7 +42,7 @@ func (conf *Config) Access(kong *pdk.PDK) {
         }
 
         for _, kv := range conf.KeyValuePairs {
-            var value string
+            var value interface{}
             switch kv.ValueSource {
             case "header":
                 headers, err := kong.Request.GetHeaders(-1)
@@ -52,17 +50,17 @@ func (conf *Config) Access(kong *pdk.PDK) {
                     kong.Log.Err(fmt.Sprintf("failed to get headers: %v", err))
                     continue
                 }
-                values := headers[kv.Key]
-                if len(values) > 0 {
+                values, exists := headers[kv.Key]
+                if exists && len(values) > 0 {
                     value = values[0]
                 }
             case "query":
-				queryArgs, err := kong.Request.GetQuery(-1)
+                queryArgs, err := kong.Request.GetQuery(-1)
                 if err != nil {
                     kong.Log.Err(fmt.Sprintf("failed to get query: %v", err))
                     continue
                 }
-				values, exists := queryArgs[kv.Key]
+                values, exists := queryArgs[kv.Key]
                 if exists && len(values) > 0 {
                     value = values[0]
                 }
@@ -71,7 +69,7 @@ func (conf *Config) Access(kong *pdk.PDK) {
                 continue
             }
 
-            if value == "" {
+            if value == nil {
                 value = "default_value"
             }
             targetField[kv.Key] = value
