@@ -2,80 +2,90 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/Kong/go-pdk"
 	"github.com/Kong/go-pdk/server"
-	lua "github.com/yuin/gopher-lua"
 )
 
-func main() {
-	server.StartServer(New, "0.1", 1)
+type Config struct {
+    // Nama objek yang akan diubah, misalnya "Header" atau "Data"
+    TargetField string `json:"target_field"`
+    // Nama kunci yang akan ditambahkan ke target_field
+    Key string `json:"key"`
+    // Nama header atau query parameter yang akan digunakan untuk mendapatkan nilai
+    ValueSource string `json:"value_source"`
 }
 
-type Config struct{}
-
 func New() interface{} {
-	return &Config{}
+    return &Config{}
 }
 
 func (conf *Config) Access(kong *pdk.PDK) {
-	L := lua.NewState()
-	defer L.Close()
+    var value string
+    var err error
 
-	headers, err := kong.Request.GetHeaders(-1)
-	if err != nil {
-		kong.Log.Err("Failed to get headers: ", err.Error())
-		return
-	}
+    switch conf.ValueSource {
+    case "header":
+        headers, err := kong.Request.GetHeaders(-1)
+        if err != nil {
+            kong.Log.Err(fmt.Sprintf("failed to get headers: %v", err))
+            return
+        }
+        values := headers[conf.Key]
+        if len(values) > 0 {
+            value = values[0] // Ambil nilai pertama dari header
+        }
+    case "query":
+		query, err := kong.Request.GetQueryArg(conf.Key)
+		if err != nil {
+            kong.Log.Err(fmt.Sprintf("failed to get query params: %v", err))
+            return
+        }
+        value = query
+    default:
+        kong.Log.Err(fmt.Sprintf("unknown value_source: %v", conf.ValueSource))
+        return
+    }
 
-	payorCode := ""
-	if val, ok := headers["payor_code"]; ok {
-		if len(val) > 0 {
-			payorCode = val[0]
-		}
-	}
+    if value == "" {
+        value = "default_value"
+    }
 
-	L.SetGlobal("payor_code", lua.LString(payorCode))
-	if err := L.DoString(`
-		payor_code = payor_code
-		print("Payor code:", payor_code)
-	`); err != nil {
-		kong.Log.Err("Failed to execute Lua code: ", err.Error())
-	}
+    body, err := kong.Request.GetRawBody()
+    if err != nil {
+        kong.Log.Err(fmt.Sprintf("failed to get body: %v", err))
+        return
+    }
 
-	if payorCode == "" {
-		payorCode = "default_payor_code"
-	}
+    var bodyMap map[string]interface{}
+    err = json.Unmarshal(body, &bodyMap)
+    if err != nil {
+        kong.Log.Err(fmt.Sprintf("failed to unmarshal body: %v", err))
+        return
+    }
 
-	rawBody, err := kong.Request.GetRawBody()
-	if err != nil {
-		kong.Log.Err("Failed to get raw body: ", err.Error())
-		return
-	}
+    if targetField, exists := bodyMap[conf.TargetField].(map[string]interface{}); exists {
+        targetField[conf.Key] = value
+    } else {
+        bodyMap[conf.TargetField] = map[string]interface{}{
+            conf.Key: value,
+        }
+    }
 
-	var body map[string]interface{}
-	if err := json.Unmarshal([]byte(rawBody), &body); err != nil {
-		kong.Log.Err("Failed to unmarshal body: ", err.Error())
-		return
-	}
+    modifiedBody, err := json.Marshal(bodyMap)
+    if err != nil {
+        kong.Log.Err(fmt.Sprintf("failed to marshal modified body: %v", err))
+        return
+    }
 
-	if body == nil {
-		body = make(map[string]interface{})
-	}
-	header, ok := body["Header"].(map[string]interface{})
-	if !ok {
-		header = make(map[string]interface{})
-		body["Header"] = header
-	}
-	header["payor_code"] = payorCode
+    err = kong.ServiceRequest.SetRawBody(string(modifiedBody))
+    if err != nil {
+        kong.Log.Err(fmt.Sprintf("failed to set modified body: %v", err))
+        return
+    }
+}
 
-	newRawBody, err := json.Marshal(body)
-	if err != nil {
-		kong.Log.Err("Failed to marshal body: ", err.Error())
-		return
-	}
-
-	if err := kong.ServiceRequest.SetRawBody(string(newRawBody)); err != nil {
-		kong.Log.Err("Failed to set raw body: ", err.Error())
-	}
+func main() {
+    server.StartServer(New, "0.1", 1)
 }
